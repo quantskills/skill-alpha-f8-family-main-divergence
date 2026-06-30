@@ -1,6 +1,7 @@
 ---
 name: alpha-f8-family-main-divergence
-description: 当需要开发、计算、验证家人主力分歧因子时，使用此 skill。支持期货席位净持仓拉取、主力一致性加权分歧因子计算、无未来函数检测、IC/ICIR 回测评估和 buy/sell/hold 信号输出。
+description: Use when developing, computing or validating the F8 commodity futures broker-position divergence factor in a local Panda data environment.
+license: GPL-3.0-only
 tags: [quant, alpha, development, future]
 ---
 
@@ -30,6 +31,7 @@ tags: [quant, alpha, development, future]
 ## 使用方式
 
 ```bash
+python test.py
 python scripts/factor.py
 python scripts/validate.py
 python scripts/backtest.py
@@ -42,4 +44,9 @@ python scripts/backtest.py
 - `factor.py` 输出非空，包含 12 个必需字段，`factor_id=F8`，`data_version=real-v1`。
 - `validate.py` 输出验证通过信息，且家人席位和主力席位均至少出现一家。
 - `backtest.py` 输出研究口径和可交易口径两组指标，包含 1D-20D IC 衰减、Bootstrap IC 95% CI、成本四档分析和可交易 ARR/IR。
+- `test.py` 使用合成数据离线验证回测可导入、Bootstrap CI 和可交易口径输出。
 - 数据来源为 Panda data SDK，不读取本地文件作为正式输入。
+
+## 边界
+
+本 skill 仅用于研究和验证，不构成投资建议，不承诺收益，不代表任何平台或组织的官方背书。不得记录、提交或传播 Panda data 凭据。

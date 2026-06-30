@@ -1,10 +1,40 @@
-# alpha-f8-family-main-divergence
+# skill-alpha-f8-family-main-divergence
+
+当前远端仓库名为 `alpha-f8-family-main-divergence`。按 QuantSkills 社区公开收录规则，建议维护者将仓库重命名为 `skill-alpha-f8-family-main-divergence` 后再申请公开、收录、恢复 public 或进入 registry / quantskills / 组织首页索引。
 
 商品期货家人主力分歧 Alpha（Factor ID: F8）。计算家人席位（散户）与主力席位（机构）的净持仓方向分歧，并按主力一致性加权，输出横截面 buy/sell/hold 信号。
+
+本仓库仅提供研究与验证工具，不构成投资建议，不承诺收益，也不代表 QuantSkills、Panda data、Codex、Claude Code、Cursor、Hermes 或 OpenClaw 的官方背书。
+
+## 社区合规状态
+
+| 项目 | 状态 |
+|------|------|
+| 仓库类型 | Skill |
+| 建议仓库名 | `skill-alpha-f8-family-main-divergence` |
+| 根入口 | `SKILL.md` |
+| 中文说明 | `README.md` |
+| 英文说明 | `README.en.md` |
+| 许可证 | `GPL-3.0-only`，见 `LICENSE` 与 `skill.json` |
+| Codex 入口 | `AGENTS.md` |
+| Claude Code 入口 | `CLAUDE.md` |
+| Cursor 入口 | `.cursor/rules/skill-alpha-f8-family-main-divergence.mdc` |
+| Hermes 入口 | `HERMES.md` |
+| OpenClaw 入口 | `OPENCLAW.md` |
 
 ## 目录结构
 
 ```
+SKILL.md                                           根 skill 入口
+skill.json                                         QuantSkills 元数据
+AGENTS.md                                         Codex 入口
+CLAUDE.md                                         Claude Code 入口
+HERMES.md                                         Hermes 入口
+OPENCLAW.md                                       OpenClaw 入口
+.cursor/rules/skill-alpha-f8-family-main-divergence.mdc
+README.en.md                                      英文说明
+LICENSE                                           GPL-3.0-only 许可声明
+
 alpha-f8-family-main-divergence/               开发产物（计算、验证、回测）
   scripts/
     factor.py       因子计算，输出 Parquet 结果
@@ -12,6 +42,7 @@ alpha-f8-family-main-divergence/               开发产物（计算、验证、
     backtest.py     IC/ICIR/ARR/MDD/多空收益等回测指标
   references/
     data_guide.md   数据源与字段说明、因子公式、信号规则
+  test.py           离线小样本测试，无需 Panda data
 
 alpha-f8-family-main-divergence-production/    生产产物（只读）
   database.parquet  每日收盘后更新的因子结果
@@ -65,6 +96,7 @@ README.md           本文件
 
 ```bash
 cd alpha-f8-family-main-divergence
+python test.py
 python scripts/factor.py
 python scripts/validate.py
 python scripts/backtest.py
@@ -92,16 +124,22 @@ python scripts/backtest.py
 - `factor.py` 输出非空，含 12 个必需字段，`factor_id=F8`，`data_version=real-v1`
 - `validate.py` 输出验证通过（无未来函数、字段完整、家人席位和主力席位均至少出现一家）
 - `backtest.py` 输出研究口径与可交易口径两组指标，含 1D-20D IC 衰减、Bootstrap IC 95% CI、成本四档分析
+- `test.py` 使用合成数据离线验证回测可导入、Bootstrap CI 和可交易口径输出
 - 不通过验证不得进入生产
 
 ## 生产查询
 
 交易 agent 使用 `alpha-f8-family-main-divergence-production` skill 读取 `database.parquet`，筛选 `factor_id == "F8"`，不在调用时重新计算因子。
 
+生产查询结果只能作为研究数据读取，不应表述为交易建议、收益预测或确定性信号。
+
 ## 依赖
 
 - Python 3.10+
 - panda-data
 - pandas
-- scipy
 - pyarrow 或 fastparquet
+
+## 许可证
+
+本仓库使用 `GPL-3.0-only`。见 `LICENSE`。
