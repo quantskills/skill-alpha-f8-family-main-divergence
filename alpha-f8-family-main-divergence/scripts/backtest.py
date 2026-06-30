@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
+import random
 import time
 from datetime import timedelta
 
 import pandas as pd
-from scipy import stats
 
 from factor import _date_to_yyyymmdd, _parse_underlying, calculate_factor, load_real_position
 
@@ -305,6 +304,74 @@ def rank_ic(x: pd.DataFrame) -> float:
     return float(factor_rank.corr(return_rank))
 
 
+def _quantile(values: list[float], q: float) -> float:
+    if not values:
+        return float("nan")
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return float(ordered[0])
+    index = (len(ordered) - 1) * q
+    lower = int(index)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = index - lower
+    return float(ordered[lower] * (1 - weight) + ordered[upper] * weight)
+
+
+def _daily_ic_from_panel(panel: pd.DataFrame) -> pd.Series:
+    return panel.groupby("trade_date").apply(pearson_ic, include_groups=False).dropna()
+
+
+def bootstrap_ic_confidence_interval(
+    factor_df: pd.DataFrame,
+    returns_df: pd.DataFrame,
+    n_bootstrap: int = 1000,
+    confidence_level: float = 0.95,
+    random_state: int = 42,
+) -> dict:
+    """
+    Estimate a bootstrap confidence interval for daily Pearson IC.
+
+    Resampling is done over daily IC observations, which keeps the cross-section
+    calculation intact and avoids scipy as a runtime dependency.
+    """
+    if n_bootstrap <= 0:
+        raise ValueError("n_bootstrap 必须为正整数")
+    if not 0 < confidence_level < 1:
+        raise ValueError("confidence_level 必须位于 (0, 1)")
+
+    panel = factor_df[["trade_date", "symbol", "factor_value"]].merge(
+        returns_df[["trade_date", "symbol", "forward_return"]],
+        on=["trade_date", "symbol"],
+        how="inner",
+    ).dropna(subset=["factor_value", "forward_return"])
+    if panel.empty:
+        raise ValueError("回测样本为空：factor_df 与 returns_df 无匹配记录")
+
+    daily_ic = _daily_ic_from_panel(panel)
+    if daily_ic.empty:
+        return {
+            "IC": 0.0,
+            "IC_95_CI_low": 0.0,
+            "IC_95_CI_high": 0.0,
+            "bootstrap_samples": 0,
+        }
+
+    values = [float(v) for v in daily_ic.tolist()]
+    rng = random.Random(random_state)
+    boot_means = []
+    for _ in range(n_bootstrap):
+        sample = [values[rng.randrange(len(values))] for _ in values]
+        boot_means.append(sum(sample) / len(sample))
+
+    alpha = (1 - confidence_level) / 2
+    return {
+        "IC": round(float(daily_ic.mean()), 6),
+        "IC_95_CI_low": round(_quantile(boot_means, alpha), 6),
+        "IC_95_CI_high": round(_quantile(boot_means, 1 - alpha), 6),
+        "bootstrap_samples": int(n_bootstrap),
+    }
+
+
 def information_ratio(returns: pd.Series) -> float:
     std = returns.std()
     if returns.empty or not std:
@@ -375,7 +442,7 @@ def evaluate_factor(factor_df: pd.DataFrame, returns_df: pd.DataFrame) -> dict:
     if panel.empty:
         raise ValueError("回测样本为空：factor_df 与 returns_df 无匹配记录")
 
-    daily_ic = panel.groupby("trade_date").apply(pearson_ic, include_groups=False).dropna()
+    daily_ic = _daily_ic_from_panel(panel)
     daily_rank_ic = panel.groupby("trade_date").apply(rank_ic, include_groups=False).dropna()
 
     ic = float(daily_ic.mean()) if not daily_ic.empty else 0.0
@@ -470,6 +537,40 @@ def calculate_metrics(factor: pd.DataFrame, forward: pd.DataFrame, rollover_coun
     return evaluate_factor(factor, forward)
 
 
+def compute_backtest_results(
+    factor: pd.DataFrame,
+    dominant: pd.DataFrame,
+    daily: pd.DataFrame,
+    data_lag: int = 0,
+    roll_cost_bps: float = 5.0,
+    bootstrap_samples: int = 1000,
+    bootstrap_seed: int = 42,
+) -> dict:
+    """Compute research and tradeable backtest views from prepared data."""
+    research_forward = build_forward_returns(dominant, daily)
+    tradeable_forward = build_tradeable_forward_returns(
+        dominant,
+        daily,
+        data_lag=data_lag,
+        roll_cost_bps=roll_cost_bps,
+    )
+    multi_returns = build_multi_period_returns(dominant, daily)
+
+    return {
+        "research": evaluate_factor(factor, research_forward),
+        "tradeable": evaluate_factor(factor, tradeable_forward),
+        "bootstrap_ic": bootstrap_ic_confidence_interval(
+            factor,
+            research_forward,
+            n_bootstrap=bootstrap_samples,
+            random_state=bootstrap_seed,
+        ),
+        "cost_sensitivity": cost_sensitivity(factor, tradeable_forward, cost_levels=[0, 5, 15, 30]),
+        "holding_period_ic": holding_period_ic(factor, multi_returns),
+        "rollover_count": count_rollovers(dominant),
+    }
+
+
 def run_backtest() -> dict:
     from datetime import datetime
     positions = load_real_position()
@@ -478,9 +579,7 @@ def run_backtest() -> dict:
     start_date = factor["trade_date"].min()
     end_date = factor["trade_date"].max()
     dominant, daily = load_real_dominant_and_daily(symbols, start_date, end_date)
-    forward = build_forward_returns(dominant, daily)
-    metrics = evaluate_factor(factor, forward)
-    return metrics
+    return compute_backtest_results(factor, dominant, daily)
 
 
 if __name__ == "__main__":
@@ -497,31 +596,38 @@ if __name__ == "__main__":
     ).strftime("%Y-%m-%d")
 
     dominant, daily = load_real_dominant_and_daily(_symbols, _start, _end)
-    forward = build_forward_returns(dominant, daily)
-    rollovers = count_rollovers(dominant)
-
     factor = calculate_factor(
         positions,
         update_time=datetime.now().isoformat(timespec="seconds"),
     )
+    results = compute_backtest_results(factor, dominant, daily)
 
     print("\n" + "=" * 60)
     print(f"F8 {FACTOR_NAME} 回测结果")
     print("=" * 60)
-    metrics = evaluate_factor(factor, forward)
-    for key, value in metrics.items():
+
+    print("\n研究口径指标:")
+    for key, value in results["research"].items():
+        print(f"  {key}: {value}")
+
+    print("\n可交易口径指标:")
+    print(f"  rollover_count: {results['rollover_count']}")
+    for key, value in results["tradeable"].items():
+        print(f"  {key}: {value}")
+
+    print("\nBootstrap IC 95% CI:")
+    for key, value in results["bootstrap_ic"].items():
         print(f"  {key}: {value}")
 
     print("\n成本敏感性分析:")
-    sensitivity = cost_sensitivity(factor, forward, cost_levels=[0, 5, 15, 30])
+    sensitivity = results["cost_sensitivity"]
     for label, v in sensitivity.items():
         print(f"  {label}: {v}")
 
     print("\n持有期 IC 衰减分析:")
     print(f"  {'持有期':>6}  {'IC':>10}  {'ICIR':>10}")
     print(f"  {'-'*6}  {'-'*10}  {'-'*10}")
-    multi_returns = build_multi_period_returns(dominant, daily)
-    decay = holding_period_ic(factor, multi_returns)
+    decay = results["holding_period_ic"]
     for h in [1, 3, 5, 10, 20]:
         m = decay.get(h, {})
         ic_val = m.get("IC", float("nan"))
